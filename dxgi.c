@@ -16,7 +16,6 @@
 #include "resource.h"
 
 /*
-
 Presentable formats:
 DXGI_FORMAT_B5G6R5_UNORM => VK_FORMAT_B5G6R5_UNORM_PACK16 => PIPE_FORMAT_R5G6B5_UNORM
 DXGI_FORMAT_B5G5R5A1_UNORM => VK_FORMAT_B5G5R5A1_UNORM_PACK16 => PIPE_FORMAT_A1R5G5B5_UNORM
@@ -26,27 +25,27 @@ DXGI_FORMAT_R16G16B16A16_FLOAT => VK_FORMAT_R16G16B16A16_SFLOAT => PIPE_FORMAT_R
 DXGI_FORMAT_R10G10B10A2_UNORM => VK_FORMAT_A2B10G10R10_UNORM_PACK32 => PIPE_FORMAT_R10G10B10A2_UNORM
 DXGI_FORMAT_R8G8B8A8_UNORM => VK_FORMAT_R8G8B8A8_UNORM => PIPE_FORMAT_R8G8B8A8_UNORM
 DXGI_FORMAT_R8G8B8A8_UNORM_SRGB => VK_FORMAT_R8G8B8A8_SRGB => PIPE_FORMAT_R8G8B8A8_SRGB
-
-virtio_wddm_present() {
-    TODO:
-    ID3D11DeviceContext4_Signal present fence
-    ID3D11DeviceContext_Flush
-    pfnwaitfromgpu,
-    pfnpresent,
-
-    blit is the same, just with blit before signal/flush
-}
 */
 
 static HRESULT virtio_wddm_sync_with_present_context(VIRTIO_WDDM_Device *device) {
     uint64_t value = atomic_fetch_add_explicit((volatile uint64_t *) &device->base.presentFenceValue, 1, memory_order_acq_rel);
 
-    ID3D11DeviceContext4_Signal(device->base.pCtx4, device->base.pPresentFence, value);
+    HRESULT hr = ID3D11DeviceContext4_Signal(device->base.pCtx4, device->base.pPresentFence, value);
+    if (FAILED(hr)) {
+        ERROR("%s: Failed to signal present fence: 0x%08lx", __FUNCTION__, hr);
+        return hr;
+    }
+
     ID3D11DeviceContext1_Flush(device->base.pCtx1);
 
 #if 0
     HANDLE event = CreateEventA(NULL, true, false, NULL);
-    ID3D11Fence_SetEventOnCompletion(device->base.pPresentFence, value, event);
+    hr = ID3D11Fence_SetEventOnCompletion(device->base.pPresentFence, value, event);
+    if (FAILED(hr)) {
+        ERROR("%s: Failed to set event on present fence completion: 0x%08lx", __FUNCTION__, hr);
+        return hr;
+    }
+
     WaitForSingleObject(event, INFINITE);
 #else
     // NOTE: the following requires DXVK to submit synchronously in ID3D11DeviceContext1_Flush
@@ -58,7 +57,7 @@ static HRESULT virtio_wddm_sync_with_present_context(VIRTIO_WDDM_Device *device)
         .ObjectHandleArray = &device->present.fence,
         .MonitoredFenceValueArray = &value,
     };
-    HRESULT hr = device->base.KTCallbacks.pfnWaitForSynchronizationObjectFromGpuCb(device->base.hRTDevice.handle, &wait);
+    hr = device->base.KTCallbacks.pfnWaitForSynchronizationObjectFromGpuCb(device->base.hRTDevice.handle, &wait);
     if (FAILED(hr)) {
         ERROR("%s: Failed to wait from gpu: 0x%08lx", __FUNCTION__, hr);
         return hr;
@@ -260,6 +259,11 @@ HRESULT APIENTRY virtio_wddm_blt(DXGI_DDI_ARG_BLT *pArgs) {
 
 HRESULT APIENTRY virtio_wddm_resolve_shared_resource(DXGI_DDI_ARG_RESOLVESHAREDRESOURCE *pArgs) {
     TRACE();
+
+    VIRTIO_WDDM_Device *device = (void *) pArgs->hDevice;
+    /* MSDN says we should flush, so let's flush */
+    ID3D11DeviceContext1_Flush(device->base.pCtx1);
+
     return S_OK;
 }
 
@@ -290,7 +294,7 @@ HRESULT APIENTRY virtio_wddm_blt1(DXGI_DDI_ARG_BLT1 *pArgs) {
             .front = 0,
             .right = pArgs->SrcRight,
             .bottom = pArgs->SrcBottom,
-            .front = 1,
+            .back = 1,
         };
 
         ID3D11DeviceContext1_CopySubresourceRegion(

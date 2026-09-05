@@ -153,6 +153,26 @@ static void APIENTRY virtio_wddm_destroy_device(D3D10DDI_HDEVICE hDevice)
 
     // FIXME: ensure that DXVK never tries to submit any more commands
 
+    if (device->present.context != NULL) {
+        D3DDDICB_DESTROYCONTEXT context = {
+            .hContext = device->present.context,
+        };
+        HRESULT hr = device->base.KTCallbacks.pfnDestroyContextCb(device->base.hRTDevice.handle, &context);
+        if (FAILED(hr)) {
+            ERROR("%s: Failed to destroy present context: 0x%08lx", __FUNCTION__, hr);
+        }
+    }
+
+    if (device->paging.queue != 0) {
+        D3DDDI_DESTROYPAGINGQUEUE paging_queue = {
+            .hPagingQueue = device->paging.queue,
+        };
+        HRESULT hr = device->base.KTCallbacks.pfnDestroyPagingQueueCb(device->base.hRTDevice.handle, &paging_queue);
+        if (FAILED(hr)) {
+            ERROR("%s: Failed to destroy paging queue: 0x%08lx", __FUNCTION__, hr);
+        }
+    }
+
     ID3D11Fence_Release(device->base.pPresentFence);
 
     ID3D11DeviceContext1_Flush(device->base.pCtx1);
@@ -401,7 +421,7 @@ HRESULT APIENTRY virtio_wddm_create_device(D3D10DDI_HADAPTER hAdapter, D3D10DDIA
 
     for (size_t i = 0; i < extension_count; i++) {
         extension_names[i] = extension_props[i].extensionName;
-        if (strcmp(extension_props[i].extensionName, VK_LUNARG_DIRECT_DRIVER_LOADING_EXTENSION_NAME)) {
+        if (strcmp(extension_props[i].extensionName, VK_LUNARG_DIRECT_DRIVER_LOADING_EXTENSION_NAME) == 0) {
             have_LUNARG_direct_driver_loading = true;
         }
     }

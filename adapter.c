@@ -29,6 +29,7 @@ void virtio_wddm_log(const char *file, int line, const char *label, const char *
 }
 
 extern int __cdecl DXVK_umd_log_output(const char *line) {
+    return 0;
 }
 #else
 extern void print_log_raw(const char *line) {
@@ -72,6 +73,7 @@ void virtio_wddm_log(const char *file, int line, const char *label, const char *
 
 extern int __cdecl DXVK_umd_log_output(const char *line) {
     print_log_raw(line);
+    return 0;
 }
 
 extern void triton_log_raw(const char *line) {
