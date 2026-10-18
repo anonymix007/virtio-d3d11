@@ -16,8 +16,6 @@
 
 #define VIRTIO_WDDM_ESCAPE_RESOURCE_BUSY_TAG 6004778599252706646ull
 
-#define VIRTIO_WDDM_ESCAPE_BLOB_INFO_SET_TAG 4778121577144468822ull
-
 #define VIRTIO_WDDM_ESCAPE_BLOB_MAP_TAG 4778391004737914198ull
 
 #define VIRTIO_WDDM_ESCAPE_CONTEXT_INIT_TAG 5285066810588349782ull
@@ -116,17 +114,39 @@ typedef uint32_t VIRTIO_WDDM_BlobFlag;
 #define VIRTIO_WDDM_BLOB_FLAG_CROSS_DEVICE (uint32_t)(1u << 2)
 
 typedef struct __attribute__((packed)) {
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t bind;
+} VIRTIO_WDDM_BlobInfo;
+
+typedef struct __attribute__((packed)) {
     uint64_t tag;
     uint64_t id;
     VIRTIO_WDDM_BlobMem mem;
     VIRTIO_WDDM_BlobFlag flags;
     uint64_t size;
+    VIRTIO_WDDM_BlobInfo info;
 } VIRTIO_WDDM_AllocateBlob;
 
 typedef union __attribute__((packed)) {
     uint64_t tag;
     VIRTIO_WDDM_Allocate3d _3d;
     VIRTIO_WDDM_AllocateBlob blob;
+} VIRTIO_WDDM_CreateAllocationInfo;
+
+typedef struct __attribute__((packed)) {
+    uint64_t offset;
+    uint64_t size;
+    uint64_t stride;
+} VIRTIO_WDDM_PlaneLayout;
+
+typedef struct __attribute__((packed)) {
+    VIRTIO_WDDM_CreateAllocationInfo base;
+    uint32_t res_id;
+    uint32_t num_planes;
+    uint64_t modifier;
+    VIRTIO_WDDM_PlaneLayout planes[4];
 } VIRTIO_WDDM_CreateAllocation;
 
 typedef struct __attribute__((packed)) {
@@ -149,42 +169,10 @@ typedef struct __attribute__((packed)) {
 } VIRTIO_WDDM_ContextInit;
 
 typedef struct __attribute__((packed)) {
-    VIRTIO_WDDM_Allocate3d _3d;
-    uint64_t modifier;
-    uint64_t offsets[4];
-    uint32_t strides[4];
-    uint32_t sizes[4];
-    uint32_t num_planes;
-} VIRTIO_WDDM_Allocate3dFull;
-
-typedef struct __attribute__((packed)) {
-    uint32_t width;
-    uint32_t height;
-    uint32_t format;
-    uint32_t bind;
-    uint64_t modifier;
-    uint32_t strides[4];
-    uint32_t offsets[4];
-} VIRTIO_WDDM_BlobInfo;
-
-typedef struct __attribute__((packed)) {
-    VIRTIO_WDDM_AllocateBlob blob;
-    VIRTIO_WDDM_BlobInfo info;
-    bool info_valid;
-    bool created;
-} VIRTIO_WDDM_AllocateBlobFull;
-
-typedef union __attribute__((packed)) {
-    uint64_t tag;
-    VIRTIO_WDDM_Allocate3dFull _3d;
-    VIRTIO_WDDM_AllocateBlobFull blob;
-} VIRTIO_WDDM_AllocationInfo;
-
-typedef struct __attribute__((packed)) {
     uint64_t tag;
     D3DKMT_HANDLE handle;
-    uint32_t id;
-    VIRTIO_WDDM_AllocationInfo info;
+    uint32_t padding;
+    VIRTIO_WDDM_CreateAllocation info;
 } VIRTIO_WDDM_ResourceInfo;
 
 typedef union {
@@ -199,13 +187,6 @@ typedef struct __attribute__((packed)) {
     bool wait;
     bool is_busy;
 } VIRTIO_WDDM_ResourceBusy;
-
-typedef struct __attribute__((packed)) {
-    uint64_t tag;
-    D3DKMT_HANDLE handle;
-    uint32_t _padding;
-    VIRTIO_WDDM_BlobInfo blob_info;
-} VIRTIO_WDDM_BlobInfoSet;
 
 typedef uint32_t VIRTIO_WDDM_BlobMapFlags;
 #define VIRTIO_WDDM_BLOB_MAP_FLAGS_UNMAP (uint32_t)(1u << 0)
@@ -234,7 +215,6 @@ typedef union __attribute__((packed)) {
     VIRTIO_WDDM_ContextInit ctx_init;
     VIRTIO_WDDM_ResourceInfo res_info;
     VIRTIO_WDDM_ResourceBusy res_busy;
-    VIRTIO_WDDM_BlobInfoSet blob_set;
     VIRTIO_WDDM_BlobMap blob_map;
     VIRTIO_WDDM_ExecBuffer exec_buf;
 } VIRTIO_WDDM_Escape;

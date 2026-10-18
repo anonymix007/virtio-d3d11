@@ -12,6 +12,26 @@
 #include "dxvk.h"
 #include "resource.h"
 
+#ifndef DRM_FORMAT_MOD_INVALID
+#define DRM_FORMAT_MOD_INVALID 0x00FFFFFFFFFFFFFF
+#endif
+
+typedef enum {
+    VIRTIO_WDDM_EXTRA_D3D11_TEXTURE2D = 0,
+} VIRTIO_WDDM_ExtraAllocationDataType;
+
+typedef struct {
+    VIRTIO_WDDM_ExtraAllocationDataType type;
+    union {
+        D3D11_TEXTURE2D_DESC1 d3d11_2d;
+    } as;
+} VIRTIO_WDDM_ExtraAllocationData;
+
+typedef struct {
+    VIRTIO_WDDM_CreateAllocation create;
+    VIRTIO_WDDM_ExtraAllocationData extra_data;
+} VIRTIO_WDDM_UMD_AllocationData;
+
 size_t APIENTRY virtio_wddm_calc_resource_size(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATERESOURCE *pArgs) {
     return sizeof(VIRTIO_WDDM_Resource);
 }
@@ -312,14 +332,9 @@ static HRESULT create_shared_vk_image(VIRTIO_WDDM_Device *device, D3D11_TEXTURE2
        .pNext = alloc_next,
        .image = *image,
     };
-    VkExportMemoryAllocateInfo export_info = {
-        .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
-        .pNext = &dedicated_info,
-        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
-    };
     VkMemoryAllocateInfo memory_alloc_info = {
        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-       .pNext = &export_info,
+       .pNext = &dedicated_info,
        .allocationSize = mem_req.memoryRequirements.size,
        .memoryTypeIndex = mem,
     };
@@ -368,6 +383,50 @@ static HRESULT create_shared_vk_image(VIRTIO_WDDM_Device *device, D3D11_TEXTURE2
     }
 
     return S_OK;
+}
+
+static HRESULT open_shared_vk_image(VIRTIO_WDDM_Device *device, const D3D10DDIARG_OPENRESOURCE *pArgs, D3D10DDI_HRTRESOURCE hRTResource, VIRTIO_WDDM_ResourceInfo *res_info, D3D11_TEXTURE2D_DESC1 *desc, VkDeviceMemory *memory, VkImage *image, D3DKMT_HANDLE *alloc) {
+    VkSubresourceLayout planes[4] = {};
+    for (uint32_t i = 0; i < 4; i++) {
+        planes[i] = (VkSubresourceLayout) {
+            .offset = res_info->info.planes[i].offset,
+            //.size = res_info->info.planes[i].size,
+            .rowPitch = res_info->info.planes[i].stride,
+        };
+    }
+
+    // TODO: spec requires us to check that the modifier is supported, but in practice it probably is
+    // supported because host virglrenderer used vulkan for modifier queries
+    VkImageDrmFormatModifierExplicitCreateInfoEXT modifier_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+        .drmFormatModifier = res_info->info.modifier,
+        .drmFormatModifierPlaneCount = res_info->info.num_planes,
+        .pPlaneLayouts = planes,
+    };
+
+    VkD3DDDIOpenResourceMESA d3d_open = {
+        .sType = VK_STRUCTURE_TYPE_D3DDDI_OPEN_RESOURCE_MESA,
+        .hRTResource = hRTResource.handle,
+        .pOpenResource = pArgs,
+        .pResourceInfo = res_info,
+    };
+
+    VkImportMemoryWin32HandleInfoKHR handle_info = {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR,
+        .pNext = &d3d_open,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
+        .handle = (HANDLE) (intptr_t) pArgs->pOpenAllocationInfo2->hAllocation,
+    };
+
+    void *image_next = NULL;
+    VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
+
+    if (modifier_info.drmFormatModifier != DRM_FORMAT_MOD_INVALID) {
+        tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+        image_next = &modifier_info;
+    }
+
+    return create_shared_vk_image(device, desc, tiling, image_next, &handle_info, memory, image, alloc);
 }
 
 static inline unsigned dxgi_to_virgl_format(DXGI_FORMAT format) {
@@ -494,86 +553,36 @@ static inline unsigned dxgi_format_bytes_per_pixel(DXGI_FORMAT format) {
     return 0;
 }
 
-/*
-static HRESULT open_resource(VIRTIO_WDDM_Device *device, D3DKMT_HANDLE alloc) {
-    VIRTIO_WDDM_Escape escape_priv = {
-        .res_atta = {
-            .tag = VIRTIO_WDDM_ESCAPE_RESOURCE_ATTACH_TAG,
-            .handle = alloc,
-        },
-    };
-    D3DDDICB_ESCAPE escape = {
-        .hDevice = device->base.hRTDevice.handle,
-        .pPrivateDriverData = &escape_priv,
-        .PrivateDriverDataSize = sizeof(escape_priv),
-    };
-    HRESULT hr = device->base.KTCallbacks.pfnEscapeCb(device->base.pAdapter->hRTAdapter.handle, &escape);
-    if (FAILED(hr)) {
-        ERROR("%s: Failed to attach resource: 0x%08lx", __FUNCTION__, hr);
-        return hr;
-    }
-
-    return S_OK;
-}
-*/
-
-static HRESULT query_resource_info(VIRTIO_WDDM_Device *device, D3DKMT_HANDLE alloc, uint32_t *id, VIRTIO_WDDM_AllocationInfo *info) {
-    VIRTIO_WDDM_Escape escape_priv = {
-        .res_info = {
-            .tag = VIRTIO_WDDM_ESCAPE_RESOURCE_INFO_TAG,
-            .handle = alloc,
-            .info = {
-                ._3d = {
-                    .modifier = 0x00FFFFFFFFFFFFFF,
-                },
-            },
-        },
-    };
-    D3DDDICB_ESCAPE escape = {
-        .hDevice = device->base.hRTDevice.handle,
-        .pPrivateDriverData = &escape_priv,
-        .PrivateDriverDataSize = sizeof(escape_priv),
-    };
-    HRESULT hr = device->base.KTCallbacks.pfnEscapeCb(device->base.pAdapter->hRTAdapter.handle, &escape);
-    if (FAILED(hr)) {
-        ERROR("%s: Failed to get resource id: 0x%08lx", __FUNCTION__, hr);
-        return hr;
-    }
-
-
-    if (id != NULL) {
-        *id = escape_priv.res_info.id;
-    }
-    if (info != NULL) {
-        *info = escape_priv.res_info.info;
-    }
-
-    return S_OK;
-}
-
-static HRESULT create_shared_3d_resource(VIRTIO_WDDM_Device *device, D3D11_TEXTURE2D_DESC1 *desc, bool primary, HANDLE hRTResource, D3DKMT_HANDLE *hKMResource, D3DDDI_ALLOCATIONINFO2 *alloc, uint32_t *id, VIRTIO_WDDM_Allocate3dFull *info) {
+static HRESULT create_shared_3d_resource(VIRTIO_WDDM_Device *device, D3D11_TEXTURE2D_DESC1 *desc, bool primary, HANDLE hRTResource, D3DKMT_HANDLE *hKMResource, D3DDDI_ALLOCATIONINFO2 *alloc, VIRTIO_WDDM_CreateAllocation *info) {
     VIRTIO_WDDM_CreateResource res_priv = {
         .tag = VIRTIO_WDDM_CREATE_RESOURCE_TAG,
     };
 
-    VIRTIO_WDDM_CreateAllocation alloc_priv = {
-        ._3d = {
-            .tag = VIRTIO_WDDM_ALLOCATE_3D_TAG,
-            .target = 2,
-            .format = dxgi_to_virgl_format(desc->Format),
-            .bind = VIRGL_BIND_RENDER_TARGET | VIRGL_BIND_DISPLAY_TARGET | VIRGL_BIND_SAMPLER_VIEW | VIRGL_BIND_SCANOUT | VIRGL_BIND_SHARED,
-            .width = desc->Width,
-            .height = desc->Height,
-            .depth = 1,
-            .array_size = desc->ArraySize,
-            .last_level = desc->MipLevels - 1,
-            .nr_samples = desc->SampleDesc.Count,
-            .flags = 0,
-            .size = desc->Width * desc->Height * dxgi_format_bytes_per_pixel(desc->Format),
+    VIRTIO_WDDM_UMD_AllocationData alloc_priv = {
+        .create = {
+            .base._3d = {
+                .tag = VIRTIO_WDDM_ALLOCATE_3D_TAG,
+                .target = 2,
+                .format = dxgi_to_virgl_format(desc->Format),
+                .bind = VIRGL_BIND_RENDER_TARGET | VIRGL_BIND_DISPLAY_TARGET | VIRGL_BIND_SAMPLER_VIEW | VIRGL_BIND_SCANOUT | VIRGL_BIND_SHARED,
+                .width = desc->Width,
+                .height = desc->Height,
+                .depth = 1,
+                .array_size = desc->ArraySize,
+                .last_level = desc->MipLevels - 1,
+                .nr_samples = desc->SampleDesc.Count,
+                .flags = 0,
+                .size = desc->Width * desc->Height * dxgi_format_bytes_per_pixel(desc->Format),
+            },
+            .modifier = DRM_FORMAT_MOD_INVALID,
         },
+        .extra_data = {
+            .type = VIRTIO_WDDM_EXTRA_D3D11_TEXTURE2D,
+            .as.d3d11_2d = *desc,
+        }
     };
 
-    if (alloc_priv._3d.format == VIRGL_FORMAT_NONE || alloc_priv._3d.size == 0) {
+    if (alloc_priv.create.base._3d.format == VIRGL_FORMAT_NONE || alloc_priv.create.base._3d.size == 0) {
         ERROR("%s: Unsupported DXGI format: %u", __FUNCTION__, desc->Format);
         return E_OUTOFMEMORY;
     }
@@ -602,17 +611,11 @@ static HRESULT create_shared_3d_resource(VIRTIO_WDDM_Device *device, D3D11_TEXTU
 
     *hKMResource = allocate.hKMResource;
 
-    VIRTIO_WDDM_AllocationInfo res_info;
-    hr = query_resource_info(device, alloc_info.hAllocation, id, &res_info);
-    if (FAILED(hr)) {
-        ERROR("%s: Failed to query resource info: 0x%08lx", __FUNCTION__, hr);
-        return hr;
-    }
-    ASSERT(res_info.tag == VIRTIO_WDDM_ALLOCATE_3D_TAG);
-    *info = res_info._3d;
+    ASSERT(alloc_priv.create.modifier != DRM_FORMAT_MOD_INVALID);
+    *info = alloc_priv.create;
     *alloc = alloc_info;
 
-    //INFO("%s: resource id: %u, modifier: 0x%016llx, rt: %p, km: 0x%08x, alloc: 0x%08x, dev: %p / %p", __FUNCTION__, *id, info->modifier, hRTResource, *hKMResource, alloc_info.hAllocation, device->base.hRTDevice.handle, device->callbacks.hRTDevice);
+    INFO("%s: resource id: %u, modifier: 0x%016llx, rt: %p, km: 0x%08x, alloc: 0x%08x, dev: %p / %p", __FUNCTION__, info->res_id, info->modifier, hRTResource, *hKMResource, alloc_info.hAllocation, device->base.hRTDevice.handle, device->callbacks.hRTDevice);
 
     //hr = open_resource(device, alloc_info.hAllocation);
     //if (FAILED(hr)) {
@@ -669,20 +672,20 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
 
     memset(resource, 0, sizeof(*resource));
 
-    resource->base.hRTResource   = hRTResource;
-    resource->base.Dimension     = pArgs->ResourceDimension;
-    resource->base.Format        = pArgs->Format;
-    resource->base.MipLevels     = pArgs->MipLevels;
-    resource->base.ArraySize     = pArgs->ArraySize;
-    resource->base.BindFlags     = pArgs->BindFlags;
-    resource->base.MiscFlags     = pArgs->MiscFlags;
-    resource->base.MapFlags      = pArgs->MapFlags;
-    resource->base.Usage         = pArgs->Usage;
-    resource->base.SampleDesc    = pArgs->SampleDesc;
-    resource->base.ByteStride    = pArgs->ByteStride;
+    resource->base.hRTResource = hRTResource;
+    resource->base.Dimension   = pArgs->ResourceDimension;
+    resource->base.Format      = pArgs->Format;
+    resource->base.MipLevels   = pArgs->MipLevels;
+    resource->base.ArraySize   = pArgs->ArraySize;
+    resource->base.BindFlags   = pArgs->BindFlags;
+    resource->base.MiscFlags   = pArgs->MiscFlags;
+    resource->base.MapFlags    = pArgs->MapFlags;
+    resource->base.Usage       = pArgs->Usage;
+    resource->base.SampleDesc  = pArgs->SampleDesc;
+    resource->base.ByteStride  = pArgs->ByteStride;
 
     bool bind_present = !!(pArgs->BindFlags & D3D10_DDI_BIND_PRESENT);
-    /* Primary and presentable surfaces has to be allocated as 3d resources, but shared resources could be also blobs instead */
+    /* Primary and presentable surfaces has to be allocated as 3d resources, but shared resources might be also blobs */
     bool is_primary = bind_present && pArgs->pPrimaryDesc != NULL;
     bool is_present = bind_present && !is_primary;
     bool is_shared = !!(pArgs->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED);
@@ -733,8 +736,8 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
 
         uint32_t id;
         D3DDDI_ALLOCATIONINFO2 alloc;
-        VIRTIO_WDDM_Allocate3dFull alloc_info;
-        hr = create_shared_3d_resource(device, &desc, is_primary, hRTResource.handle, &resource->base.hKMResource, &alloc, &id, &alloc_info);
+        VIRTIO_WDDM_CreateAllocation alloc_info;
+        hr = create_shared_3d_resource(device, &desc, is_primary, hRTResource.handle, &resource->base.hKMResource, &alloc, &alloc_info);
         if (FAILED(hr)) {
             ERROR("%s: failed to create shared 3d texture", __FUNCTION__);
             tritonSetError(&device->base, hr);
@@ -742,40 +745,18 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
         }
         resource->base.hKMAllocation = alloc.hAllocation;
 
-        //INFO("%s: type: %s, w %u, h %u shared %u, primary %u, id %u", __FUNCTION__, resource_type_name(pArgs->ResourceDimension), resource->base.Width, resource->base.Height, is_shared, is_primary, id);
-
-        // TODO: we need to check that the modifier is supported, but in practice it probably is supported
-        // because host uses Vulkan to query modifiers for shared 3d textures
-        VkSubresourceLayout planes[4];
-        for (uint32_t i = 0; i < alloc_info.num_planes; i++) {
-            planes[i] = (VkSubresourceLayout) {
-                .offset = alloc_info.offsets[i],
-                //.size = alloc_info.sizes[i],
-                .rowPitch = alloc_info.strides[i],
-            };
-        }
-
-        VkImageDrmFormatModifierExplicitCreateInfoEXT modifier_info = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-            .drmFormatModifier = alloc_info.modifier,
-            .drmFormatModifierPlaneCount = alloc_info.num_planes,
-            .pPlaneLayouts = planes,
-        };
+        INFO("%s: type: %s, w %u, h %u shared %u, primary %u, id %u", __FUNCTION__, resource_type_name(pArgs->ResourceDimension), resource->base.Width, resource->base.Height, is_shared, is_primary, alloc_info.res_id);
 
         VIRTIO_WDDM_ResourceInfo res_info = {
             .tag = VIRTIO_WDDM_ESCAPE_RESOURCE_INFO_TAG,
             .handle = alloc.hAllocation,
-            .id = id,
-            .info = {
-                ._3d = alloc_info,
-            },
+            .info = alloc_info,
         };
         D3DDDI_OPENALLOCATIONINFO2 open_alloc = {
             .hAllocation = alloc.hAllocation,
-            .pPrivateDriverData = &alloc_info._3d,
-            .PrivateDriverDataSize = sizeof(alloc_info._3d),
+            .pPrivateDriverData = &alloc_info,
+            .PrivateDriverDataSize = sizeof(alloc_info),
         };
-
         D3D10DDIARG_OPENRESOURCE open_resource = {
             .NumAllocations = 1,
             .pOpenAllocationInfo2 = &open_alloc,
@@ -783,20 +764,8 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
                 .handle = resource->base.hKMResource,
             },
         };
-        VkD3DDDIOpenResource d3d_open = {
-            .sType = VK_STRUCTURE_TYPE_D3DDDI_OPEN_RESOURCE,
-            .hRTResource = hRTResource.handle,
-            .pOpenResource = &open_resource,
-            .pResourceInfo = &res_info,
-        };
-        VkImportMemoryWin32HandleInfoKHR handle_info = {
-            .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR,
-            .pNext = &d3d_open,
-            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
-            .handle = (HANDLE) (intptr_t) resource->base.hKMAllocation,
-        };
 
-        hr = create_shared_vk_image(device, &desc, VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT, &modifier_info, &handle_info, &resource->memory, &resource->image, NULL);
+        hr = open_shared_vk_image(device, &open_resource, hRTResource, &res_info, &desc, &resource->memory, &resource->image, NULL);
         if (FAILED(hr)) {
             ERROR("%s: failed to import shared 3d texture to vulkan", __FUNCTION__);
             tritonSetError(&device->base, hr);
@@ -837,12 +806,23 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
             .TextureLayout  = D3D11_TEXTURE_LAYOUT_UNDEFINED,
         };
 
-        VkD3DDDICreateResource d3d_create = {
-            .sType = VK_STRUCTURE_TYPE_D3DDDI_CREATE_RESOURCE,
+        VIRTIO_WDDM_ExtraAllocationData extra_data = {
+            .type = VIRTIO_WDDM_EXTRA_D3D11_TEXTURE2D,
+            .as.d3d11_2d = desc,
+        };
+        VkD3DDDICreateResourceMESA d3d_create = {
+            .sType = VK_STRUCTURE_TYPE_D3DDDI_CREATE_RESOURCE_MESA,
             .hRTResource = hRTResource.handle,
             .pCreateResource11 = pArgs,
+            .pExtraData = &extra_data,
+            .ExtraDataSize = sizeof(extra_data),
         };
-        hr = create_shared_vk_image(device, &desc, VK_IMAGE_TILING_OPTIMAL, NULL, &d3d_create, &resource->memory, &resource->image, &resource->base.hKMAllocation);
+        VkExportMemoryAllocateInfo export_info = {
+            .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+            .pNext = &d3d_create,
+            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
+        };
+        hr = create_shared_vk_image(device, &desc, VK_IMAGE_TILING_OPTIMAL, NULL, &export_info, &resource->memory, &resource->image, &resource->base.hKMAllocation);
 
         ID3D11Texture2D *tex = NULL;
         hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->base.pDev1, &desc, resource->image, &tex);
@@ -985,6 +965,45 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
     }
 }
 
+static void resource_from_desc(VIRTIO_WDDM_Resource *resource, D3D11_TEXTURE2D_DESC1 *desc) {
+    resource->base.Dimension  = D3D10DDIRESOURCE_TEXTURE2D;
+    resource->base.Width      = desc->Width;
+    resource->base.Height     = desc->Height;
+    resource->base.MipLevels  = desc->MipLevels;
+    resource->base.ArraySize  = desc->ArraySize;
+    resource->base.Format     = desc->Format;
+    resource->base.SampleDesc = desc->SampleDesc;
+
+    switch(desc->Usage) {
+        case D3D11_USAGE_DEFAULT:   resource->base.Usage = D3D10_DDI_USAGE_DEFAULT;   break;
+        case D3D11_USAGE_IMMUTABLE: resource->base.Usage = D3D10_DDI_USAGE_IMMUTABLE; break;
+        case D3D11_USAGE_DYNAMIC:   resource->base.Usage = D3D10_DDI_USAGE_DYNAMIC;   break;
+        case D3D11_USAGE_STAGING:   resource->base.Usage = D3D10_DDI_USAGE_STAGING;   break;
+        default:                    resource->base.Usage = D3D10_DDI_USAGE_DEFAULT;   break;
+    }
+
+    if (desc->CPUAccessFlags & D3D11_CPU_ACCESS_READ)  resource->base.MapFlags |= D3D10_DDI_CPU_ACCESS_READ;
+    if (desc->CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) resource->base.MapFlags |= D3D10_DDI_CPU_ACCESS_WRITE;
+
+    if (desc->BindFlags & D3D11_BIND_VERTEX_BUFFER)    resource->base.BindFlags |= D3D10_DDI_BIND_VERTEX_BUFFER;
+    if (desc->BindFlags & D3D11_BIND_INDEX_BUFFER)     resource->base.BindFlags |= D3D10_DDI_BIND_INDEX_BUFFER;
+    if (desc->BindFlags & D3D11_BIND_CONSTANT_BUFFER)  resource->base.BindFlags |= D3D10_DDI_BIND_CONSTANT_BUFFER;
+    if (desc->BindFlags & D3D11_BIND_SHADER_RESOURCE)  resource->base.BindFlags |= D3D10_DDI_BIND_SHADER_RESOURCE;
+    if (desc->BindFlags & D3D11_BIND_STREAM_OUTPUT)    resource->base.BindFlags |= D3D10_DDI_BIND_STREAM_OUTPUT;
+    if (desc->BindFlags & D3D11_BIND_RENDER_TARGET)    resource->base.BindFlags |= D3D10_DDI_BIND_RENDER_TARGET;
+    if (desc->BindFlags & D3D11_BIND_DEPTH_STENCIL)    resource->base.BindFlags |= D3D10_DDI_BIND_DEPTH_STENCIL;
+    if (desc->BindFlags & D3D11_BIND_UNORDERED_ACCESS) resource->base.BindFlags |= D3D11_DDI_BIND_UNORDERED_ACCESS;
+    if (desc->BindFlags & D3D11_BIND_DECODER)          resource->base.BindFlags |= D3D11_DDI_BIND_DECODER;
+    if (desc->BindFlags & D3D11_BIND_VIDEO_ENCODER)    resource->base.BindFlags |= D3D11_DDI_BIND_VIDEO_ENCODER;
+
+    if (desc->MiscFlags & D3D11_RESOURCE_MISC_GENERATE_MIPS)          resource->base.MiscFlags |= D3D10_DDI_RESOURCE_AUTO_GEN_MIP_MAP;
+    if (desc->MiscFlags & D3D11_RESOURCE_MISC_SHARED)                 resource->base.MiscFlags |= D3D10_DDI_RESOURCE_MISC_SHARED;
+    if (desc->MiscFlags & D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS)      resource->base.MiscFlags |= D3D11_DDI_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+    if (desc->MiscFlags & D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS) resource->base.MiscFlags |= D3D11_DDI_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+    if (desc->MiscFlags & D3D11_RESOURCE_MISC_BUFFER_STRUCTURED)      resource->base.MiscFlags |= D3D11_DDI_RESOURCE_MISC_BUFFER_STRUCTURED;
+    if (desc->MiscFlags & D3D11_RESOURCE_MISC_RESOURCE_CLAMP)         resource->base.MiscFlags |= D3D11_DDI_RESOURCE_MISC_RESOURCE_CLAMP;
+}
+
 void APIENTRY virtio_wddm_open_resource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_OPENRESOURCE *pArgs, D3D10DDI_HRESOURCE hResource, D3D10DDI_HRTRESOURCE hRTResource) {
     VIRTIO_WDDM_Device *device = hDevice.pDrvPrivate;
     VIRTIO_WDDM_Resource *resource = hResource.pDrvPrivate;
@@ -992,192 +1011,47 @@ void APIENTRY virtio_wddm_open_resource(D3D10DDI_HDEVICE hDevice, const D3D10DDI
 
     memset(resource, 0, sizeof(*resource));
 
-    uint32_t id;
-    VIRTIO_WDDM_AllocationInfo alloc_info;
-    HRESULT hr = query_resource_info(device, pArgs->pOpenAllocationInfo2->hAllocation, &id, &alloc_info);
-    if (FAILED(hr)) {
-        ERROR("%s: failed to query resource info: hr=0x%08lx", __FUNCTION__, hr);
-        tritonSetError(&device->base, hr);
-        return;
-    }
-
     resource->base.hRTResource = hRTResource;
-    resource->base.Dimension   = D3D10DDIRESOURCE_TEXTURE2D;
-
-    resource->base.BindFlags   = D3D10_DDI_BIND_RENDER_TARGET | D3D10_DDI_BIND_PRESENT | D3D10_DDI_BIND_SHADER_RESOURCE;
-    resource->base.MiscFlags   = D3D10_DDI_RESOURCE_MISC_SHARED;
-
     resource->base.hKMResource = pArgs->hKMResource.handle;
     resource->base.hKMAllocation = pArgs->pOpenAllocationInfo2->hAllocation;
+
+    const VIRTIO_WDDM_CreateAllocation *alloc_priv = pArgs->pOpenAllocationInfo2->pPrivateDriverData;
+    ASSERT(pArgs->pOpenAllocationInfo2->PrivateDriverDataSize >= sizeof(*alloc_priv));
+    ASSERT(alloc_priv->res_id != 0);
 
     VIRTIO_WDDM_ResourceInfo res_info = {
         .tag = VIRTIO_WDDM_ESCAPE_RESOURCE_INFO_TAG,
         .handle = resource->base.hKMAllocation,
-        .id = id,
-        .info = alloc_info,
+        .info = *alloc_priv,
     };
 
-    if (alloc_info.tag == VIRTIO_WDDM_ALLOCATE_3D_TAG) {
-        resource->base.Format    = virgl_to_dxgi_format(alloc_info._3d._3d.format);
-        resource->base.Width     = alloc_info._3d._3d.width;
-        resource->base.Height    = alloc_info._3d._3d.height;
-        resource->base.Depth     = alloc_info._3d._3d.depth;
-        resource->base.MipLevels = alloc_info._3d._3d.last_level + 1;
-        resource->base.ArraySize = alloc_info._3d._3d.array_size;
+    if (pArgs->pOpenAllocationInfo2->PrivateDriverDataSize < sizeof(VIRTIO_WDDM_UMD_AllocationData)) {
+        ERROR("%s: PrivateDriverDataSize is too small: %u < %zu", __FUNCTION__, pArgs->pOpenAllocationInfo2->PrivateDriverDataSize, sizeof(VIRTIO_WDDM_UMD_AllocationData));
+        tritonSetError(&device->base, E_OUTOFMEMORY);
+        return;
+    }
 
-        resource->base.SampleDesc  = (DXGI_SAMPLE_DESC) {
-            .Count = alloc_info._3d._3d.nr_samples,
-            .Quality = 0,
-        };
+    const VIRTIO_WDDM_UMD_AllocationData *umd_alloc_data = pArgs->pOpenAllocationInfo2->pPrivateDriverData;
+    switch (umd_alloc_data->extra_data.type) {
+        case VIRTIO_WDDM_EXTRA_D3D11_TEXTURE2D: {
+            D3D11_TEXTURE2D_DESC1 desc = umd_alloc_data->extra_data.as.d3d11_2d;
+            resource_from_desc(resource, &desc);
+            HRESULT hr = open_shared_vk_image(device, pArgs, hRTResource, &res_info, &desc, &resource->memory, &resource->image, NULL);
 
-        INFO("%s: opening 2d: %ux%u, format %u => %p", __FUNCTION__, resource->base.Width, resource->base.Height, resource->base.Format, resource);
+            ID3D11Texture2D *tex = NULL;
+            hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->base.pDev1, &desc, resource->image, &tex);
+            if (FAILED(hr)) {
+                ERROR("%s: failed to import VkImage to DXVK: 0x%08lx", __FUNCTION__, hr);
+                tritonSetError(&device->base, hr);
+                return;
+            }
 
-        D3D11_TEXTURE2D_DESC1 desc = {
-            .Width          = resource->base.Width,
-            .Height         = resource->base.Height,
-            .MipLevels      = resource->base.MipLevels,
-            .ArraySize      = resource->base.ArraySize,
-            .Format         = resource->base.Format,
-            .SampleDesc     = resource->base.SampleDesc,
-            .Usage          = D3D11_USAGE_DEFAULT,
-            .BindFlags      = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-            .CPUAccessFlags = 0,
-            .MiscFlags      = D3D11_RESOURCE_MISC_SHARED,
-            .TextureLayout  = D3D11_TEXTURE_LAYOUT_UNDEFINED,
-        };
+            ASSERT(tex != NULL);
+            resource->base.pResource = (ID3D11Resource *)tex;
 
-        // TODO: we need to check that the modifier is supported, but in practice it probably is supported
-        // because host uses Vulkan to query modifiers for shared 3d textures
-        VkSubresourceLayout planes[4];
-        for (uint32_t i = 0; i < alloc_info._3d.num_planes; i++) {
-            planes[i] = (VkSubresourceLayout) {
-                .offset = alloc_info._3d.offsets[i],
-                .rowPitch = alloc_info._3d.strides[i],
-            };
-        }
-
-        VkImageDrmFormatModifierExplicitCreateInfoEXT modifier_info = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-            .drmFormatModifier = alloc_info._3d.modifier,
-            .drmFormatModifierPlaneCount = alloc_info._3d.num_planes,
-            .pPlaneLayouts = planes,
-        };
-
-        VkD3DDDIOpenResource d3d_open = {
-            .sType = VK_STRUCTURE_TYPE_D3DDDI_OPEN_RESOURCE,
-            .hRTResource = hRTResource.handle,
-            .pOpenResource = pArgs,
-            .pResourceInfo = &res_info,
-        };
-        VkImportMemoryWin32HandleInfoKHR handle_info = {
-            .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR,
-            .pNext = &d3d_open,
-            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
-            .handle = (HANDLE) (intptr_t) resource->base.hKMAllocation,
-        };
-
-        hr = create_shared_vk_image(device, &desc, VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT, &modifier_info, &handle_info, &resource->memory, &resource->image, NULL);
-        if (FAILED(hr)) {
-            ERROR("%s: failed to import shared 3d texture to vulkan", __FUNCTION__);
-            tritonSetError(&device->base, hr);
             return;
         }
-
-        ID3D11Texture2D *tex = NULL;
-        hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->base.pDev1, &desc, resource->image, &tex);
-        if (FAILED(hr)) {
-            ERROR("%s: failed to import VkImage to DXVK: 0x%08lx", __FUNCTION__, hr);
-            tritonSetError(&device->base, hr);
-            return;
-        }
-
-        ASSERT(tex != NULL);
-        resource->base.pResource = (ID3D11Resource *)tex;
-    } else if (alloc_info.tag == VIRTIO_WDDM_ALLOCATE_BLOB_TAG) {
-        ASSERT(alloc_info.blob.info_valid);
-        ASSERT(alloc_info.blob.created);
-
-        resource->base.Format    = virgl_to_dxgi_format(alloc_info.blob.info.format);
-        resource->base.Width     = alloc_info.blob.info.width;
-        resource->base.Height    = alloc_info.blob.info.height;
-        resource->base.Depth     = 1;
-        resource->base.MipLevels = 1;
-        resource->base.ArraySize = 1;
-        resource->base.SampleDesc = (DXGI_SAMPLE_DESC) {
-            .Count = 1,
-            .Quality = 0,
-        };
-
-        INFO("%s: opening 2d: %ux%u, format %u => %p", __FUNCTION__, resource->base.Width, resource->base.Height, resource->base.Format, resource);
-
-        D3D11_TEXTURE2D_DESC1 desc = {
-            .Width          = resource->base.Width,
-            .Height         = resource->base.Height,
-            .MipLevels      = resource->base.MipLevels,
-            .ArraySize      = resource->base.ArraySize,
-            .Format         = resource->base.Format,
-            .SampleDesc     = resource->base.SampleDesc,
-            .Usage          = D3D11_USAGE_DEFAULT,
-            .BindFlags      = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-            .CPUAccessFlags = 0,
-            .MiscFlags      = D3D11_RESOURCE_MISC_SHARED,
-            .TextureLayout  = D3D11_TEXTURE_LAYOUT_UNDEFINED,
-        };
-
-        // TODO: we need to check that the modifier is supported, but in practice it probably is supported
-        // because this buffer was allocated via Vulkan already
-        VkSubresourceLayout planes[4];
-        for (uint32_t i = 0; i < 4; i++) {
-            planes[i] = (VkSubresourceLayout) {
-                .offset = alloc_info.blob.info.offsets[i],
-                .rowPitch = alloc_info.blob.info.strides[i],
-            };
-        }
-
-        VkImageDrmFormatModifierExplicitCreateInfoEXT modifier_info = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-            .drmFormatModifier = alloc_info.blob.info.modifier,
-            .drmFormatModifierPlaneCount = 1, // FIXME
-            .pPlaneLayouts = planes,
-        };
-
-        VkD3DDDIOpenResource d3d_open = {
-            .sType = VK_STRUCTURE_TYPE_D3DDDI_OPEN_RESOURCE,
-            .hRTResource = hRTResource.handle,
-            .pOpenResource = pArgs,
-            .pResourceInfo = &res_info,
-        };
-        VkImportMemoryWin32HandleInfoKHR handle_info = {
-            .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR,
-            .pNext = &d3d_open,
-            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
-            .handle = (HANDLE) (intptr_t) resource->base.hKMAllocation,
-        };
-
-        if (alloc_info.blob.info.modifier != 0x00FFFFFFFFFFFFFF) {
-            hr = create_shared_vk_image(device, &desc, VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT, &modifier_info, &handle_info, &resource->memory, &resource->image, NULL);
-        } else {
-            hr = create_shared_vk_image(device, &desc, VK_IMAGE_TILING_OPTIMAL, NULL, &handle_info, &resource->memory, &resource->image, NULL);
-        }
-        if (FAILED(hr)) {
-            ERROR("%s: failed to import shared blob to vulkan", __FUNCTION__);
-            tritonSetError(&device->base, hr);
-            return;
-        }
-
-        ID3D11Texture2D *tex = NULL;
-        hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->base.pDev1, &desc, resource->image, &tex);
-        if (FAILED(hr)) {
-            ERROR("%s: failed to import VkImage to DXVK: 0x%08lx", __FUNCTION__, hr);
-            tritonSetError(&device->base, hr);
-            return;
-        }
-
-        ASSERT(tex != NULL);
-        resource->base.pResource = (ID3D11Resource *)tex;
-    } else {
-        ERROR("%s: Invalid allocation type: 0x%016x", __FUNCTION__, alloc_info.tag);
-        tritonSetError(&device->base, E_INVALIDARG);
+        default: UNREACHABLE("Invalid extra data type: %d", umd_alloc_data->extra_data.type);
     }
 }
 

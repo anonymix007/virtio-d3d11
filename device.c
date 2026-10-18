@@ -1,3 +1,4 @@
+#include <stdio.h>
 #define INITGUID
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -152,6 +153,7 @@ static void APIENTRY virtio_wddm_destroy_device(D3D10DDI_HDEVICE hDevice)
     INFO("%s: destroying device %p / %p", __FUNCTION__, device->callbacks.hRTDevice, device->base.hRTDevice.handle);
 
     // FIXME: ensure that DXVK never tries to submit any more commands
+    // Maybe it would be enough to wait for the last present fence value or something?
 
     if (device->present.context != NULL) {
         D3DDDICB_DESTROYCONTEXT context = {
@@ -364,8 +366,8 @@ HRESULT APIENTRY virtio_wddm_create_device(D3D10DDI_HADAPTER hAdapter, D3D10DDIA
 
     ASSERT(device->icd != NULL);
 
-    device->callbacks = (VkD3DDDICallbacks) {
-        .sType = VK_STRUCTURE_TYPE_D3DDDI_CALLBACKS,
+    device->callbacks = (VkD3DDDICallbacksMESA) {
+        .sType = VK_STRUCTURE_TYPE_D3DDDI_CALLBACKS_MESA,
         .AdapterLuid = adapter->luid,
         .hRTAdapter = adapter->base.hRTAdapter.handle,
         .hRTDevice = device->base.hRTDevice.handle,

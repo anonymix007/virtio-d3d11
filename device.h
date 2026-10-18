@@ -26,7 +26,7 @@ typedef struct {
     DXGI_DDI_BASE_CALLBACKS *dxgi_callbacks;
     HMODULE vulkan;
     HMODULE icd;
-    VkD3DDDICallbacks callbacks;
+    VkD3DDDICallbacksMESA callbacks;
     IDXGIAdapter *adapter;
     // ID3D11Device is stored in base
 
