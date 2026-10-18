@@ -20,19 +20,9 @@
 #include "device.h"
 
 #define NO_DEBUG
+#define MIN_LOG_LEVEL LOG_LEVEL_ERROR
 
-#ifdef NO_DEBUG
-extern void triton_log_raw(const char *line) {
-}
-
-void virtio_wddm_log(const char *file, int line, const char *label, const char *format, ...) {
-}
-
-extern int __cdecl DXVK_umd_log_output(const char *line) {
-    return 0;
-}
-#else
-extern void print_log_raw(const char *line) {
+static void print_log_raw(const char *line) {
     OutputDebugStringA(line);
 
     static FILE *out = NULL;
@@ -46,7 +36,8 @@ extern void print_log_raw(const char *line) {
     }
 }
 
-void virtio_wddm_log(const char *file, int line, const char *label, const char *format, ...) {
+void virtio_wddm_log(const char *file, int line, __Log_Level level, const char *label, const char *format, ...) {
+    if (level > MIN_LOG_LEVEL) return;
 #if 0
     fprintf(stderr, "%s:%d: %s: ", file, line, label);
     va_list args;
@@ -71,6 +62,14 @@ void virtio_wddm_log(const char *file, int line, const char *label, const char *
 #endif
 }
 
+#ifdef NO_DEBUG
+extern int __cdecl DXVK_umd_log_output(const char *line) {
+    return 0;
+}
+
+extern void triton_log_raw(const char *line) {
+}
+#else
 extern int __cdecl DXVK_umd_log_output(const char *line) {
     print_log_raw(line);
     return 0;
