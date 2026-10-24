@@ -32,6 +32,9 @@ typedef struct {
     VIRTIO_WDDM_ExtraAllocationData extra_data;
 } VIRTIO_WDDM_UMD_AllocationData;
 
+/* There must not be any padding between create and extra_data */
+static_assert(offsetof(VIRTIO_WDDM_UMD_AllocationData, extra_data) == sizeof(VIRTIO_WDDM_CreateAllocation));
+
 size_t APIENTRY virtio_wddm_calc_resource_size(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATERESOURCE *pArgs) {
     return sizeof(VIRTIO_WDDM_Resource);
 }
