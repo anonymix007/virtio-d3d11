@@ -3,7 +3,7 @@ TRITON_PATH := thirdparty/triton/src/virtio/neptune/triton
 TRITON_INCLUDES := $(TRITON_PATH)
 TRITON_DEFINES := TRITON_BUILD_COMMON_TRANSLATION_LAYER
 
-CFLAGS+=$(addprefix -I,$(TRITON_INCLUDES)) $(addprefix -D,$(TRITON_DEFINES))
+COMMON_FLAGS+=$(addprefix -I,$(TRITON_INCLUDES)) $(addprefix -D,$(TRITON_DEFINES))
 
 TRITON_SRC := \
     tritonDDI.c \
@@ -21,4 +21,4 @@ build/triton.a: $(TRITON_OBJS)
 
 build/triton/%.o: $(TRITON_PATH)/%.c | build
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(COMMON_FLAGS) $(CFLAGS) -c -o $@ $<

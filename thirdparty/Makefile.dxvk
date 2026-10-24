@@ -24,7 +24,7 @@ DXVK_INCLUDES := \
     build/src/d3d11/shaders \
     $(DXVK_PATH)/subprojects/dxbc-spirv
 
-CFLAGS+=$(addprefix -I,$(DXVK_INCLUDES)) $(addprefix -D,$(DXVK_DEFINES))
+COMMON_FLAGS+=$(addprefix -I,$(DXVK_INCLUDES)) $(addprefix -D,$(DXVK_DEFINES))
 
 DXVK_GIT_VERSION=$(shell git -C $(DXVK_PATH) describe --dirty=+)
 DXVK_TARGET=$(PREFIX)
@@ -281,11 +281,11 @@ build/dxvk-dxgi.a: $(DXGI_OBJS)
 
 build/%.o: $(DXVK_PATH)/%.cpp $(DXVK_SHADER_HEADERS) build/version.h build/buildenv.h | build
 	@mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(COMMON_FLAGS) $(CXXFLAGS) -c -o $@ $<
 
 build/%.o: $(DXVK_PATH)/%.c $(DXVK_SHADER_HEADERS) build/version.h build/buildenv.h | build
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(COMMON_FLAGS) $(CFLAGS) -c -o $@ $<
 
 build/%.h: $(DXVK_PATH)/%.comp | build
 	@mkdir -p $(dir $@)
