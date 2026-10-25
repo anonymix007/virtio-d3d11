@@ -556,7 +556,7 @@ static inline unsigned dxgi_format_bytes_per_pixel(DXGI_FORMAT format) {
     return 0;
 }
 
-static HRESULT create_shared_3d_resource(VIRTIO_WDDM_Device *device, D3D11_TEXTURE2D_DESC1 *desc, bool primary, HANDLE hRTResource, D3DKMT_HANDLE *hKMResource, D3DDDI_ALLOCATIONINFO2 *alloc, VIRTIO_WDDM_CreateAllocation *info) {
+static HRESULT create_shared_3d_resource(VIRTIO_WDDM_Device *device, D3D11_TEXTURE2D_DESC1 *desc, D3DDDI_VIDEO_PRESENT_SOURCE_ID source, bool primary, HANDLE hRTResource, D3DKMT_HANDLE *hKMResource, D3DDDI_ALLOCATIONINFO2 *alloc, VIRTIO_WDDM_CreateAllocation *info) {
     VIRTIO_WDDM_CreateResource res_priv = {
         .tag = VIRTIO_WDDM_CREATE_RESOURCE_TAG,
     };
@@ -596,6 +596,7 @@ static HRESULT create_shared_3d_resource(VIRTIO_WDDM_Device *device, D3D11_TEXTU
         .Flags = {
             .Primary = primary,
         },
+        .VidPnSourceId = source,
     };
 
     D3DDDICB_ALLOCATE allocate = {
@@ -740,7 +741,7 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
         uint32_t id;
         D3DDDI_ALLOCATIONINFO2 alloc;
         VIRTIO_WDDM_CreateAllocation alloc_info;
-        hr = create_shared_3d_resource(device, &desc, is_primary, hRTResource.handle, &resource->base.hKMResource, &alloc, &alloc_info);
+        hr = create_shared_3d_resource(device, &desc, pArgs->pPrimaryDesc ? pArgs->pPrimaryDesc->VidPnSourceId : 0, is_primary, hRTResource.handle, &resource->base.hKMResource, &alloc, &alloc_info);
         if (FAILED(hr)) {
             ERROR("%s: failed to create shared 3d texture", __FUNCTION__);
             tritonSetError(&device->base, hr);
