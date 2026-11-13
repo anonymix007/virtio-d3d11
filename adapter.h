@@ -20,6 +20,7 @@ typedef enum {
 #define UNREACHABLE(...) do { virtio_wddm_log(__FILE__, __LINE__, LOG_LEVEL_FATAL, "UNREACHABLE", __VA_ARGS__); abort(); } while (0)
 #define ERROR(...) virtio_wddm_log(__FILE__, __LINE__, LOG_LEVEL_ERROR, "ERROR", __VA_ARGS__)
 #define INFO(...) virtio_wddm_log(__FILE__, __LINE__, LOG_LEVEL_INFO,  "INFO", __VA_ARGS__)
+#define DEBUG(...) virtio_wddm_log(__FILE__, __LINE__, LOG_LEVEL_DEBUG,  "DEBUG", __VA_ARGS__)
 #define ASSERT(expr) if (!(expr)) { UNREACHABLE("Assertion failed: %s", #expr); }
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(*(x)))
 

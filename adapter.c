@@ -19,7 +19,7 @@
 #include "adapter.h"
 #include "device.h"
 
-#define NO_DEBUG
+//#define NO_DEBUG
 #define MIN_LOG_LEVEL LOG_LEVEL_ERROR
 
 static void print_log_raw(const char *line) {
@@ -38,28 +38,45 @@ static void print_log_raw(const char *line) {
 
 void virtio_wddm_log(const char *file, int line, __Log_Level level, const char *label, const char *format, ...) {
     if (level > MIN_LOG_LEVEL) return;
-#if 0
-    fprintf(stderr, "%s:%d: %s: ", file, line, label);
-    va_list args;
-    va_start(args, format);
-    vfprintf(stderr, format, args);
-    va_end(args);
-    fprintf(stderr, "\n");
-#else
+
     char buf[4096];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buf, sizeof(buf), format, args);
-    size_t len = strlen(buf);
+
+    char *cursor = buf;
+    size_t len = sizeof(buf);
+
+    {
+        char full_path[PATH_MAX];
+        GetModuleFileNameA(NULL, full_path, sizeof(full_path) - 1);
+        char *proc = strrchr(full_path, '\\');
+        if (proc != NULL) proc++;
+
+        size_t used = snprintf(cursor, len, "[%llu-%s]: %s:%d: %s: ", (uintptr_t)GetCurrentProcessId(), proc, file, line, label);
+        if (used < len) {
+            cursor += used;
+            len -= used;
+        }
+    }
+
+    {
+        va_list args;
+        va_start(args, format);
+        size_t used = vsnprintf(cursor, len, format, args);
+        va_end(args);
+
+        if (used < len) {
+            cursor += used;
+            len -= used;
+        }
+    }
+
+    len = strlen(buf);
     if (len == sizeof(buf) - 1) {
         buf[sizeof(buf)-2] = '\n';
     } else {
         buf[len] = '\n';
         buf[len+1] = '\0';
     }
-    va_end(args);
     print_log_raw(buf);
-#endif
 }
 
 #ifdef NO_DEBUG
