@@ -154,6 +154,7 @@ static void APIENTRY virtio_wddm_destroy_device(D3D10DDI_HDEVICE hDevice)
 
     // FIXME: ensure that DXVK never tries to submit any more commands
     // Maybe it would be enough to wait for the last present fence value or something?
+    // vkQueueWaitIdle maybe?
 
     if (device->present.context != NULL) {
         D3DDDICB_DESTROYCONTEXT context = {
@@ -188,6 +189,8 @@ static void APIENTRY virtio_wddm_destroy_device(D3D10DDI_HDEVICE hDevice)
     ID3D11Device2_Release(device->base.pDev2);
     ID3D11Device3_Release(device->base.pDev3);
     ID3D11Device5_Release(device->base.pDev5);
+
+    IUnknown_Release(device->dxvk_interop);
 
     IDXGIAdapter_Release(device->adapter);
 
@@ -537,6 +540,12 @@ HRESULT APIENTRY virtio_wddm_create_device(D3D10DDI_HADAPTER hAdapter, D3D10DDIA
         return hr;
     }
 
+    hr = DXVK_ID3D11Device_QueryInterface_IDXGIVkInteropDevice1(d3d11_device, &device->dxvk_interop);
+    if (FAILED(hr)) {
+        ERROR("Failed to query IDXGIVkInteropDevice1 interface for DXVK D3D11 device: 0x%x", hr);
+        return hr;
+    }
+
     hr = ID3D11DeviceContext_QueryInterface(d3d11_context, &IID_ID3D11DeviceContext1, (void **) &device->base.pCtx1);
     if (FAILED(hr)) {
         ERROR("Failed to query ID3D11DeviceContext1 interface for DXVK D3D11 device context: 0x%x", hr);
@@ -561,12 +570,7 @@ HRESULT APIENTRY virtio_wddm_create_device(D3D10DDI_HADAPTER hAdapter, D3D10DDIA
         return hr;
     }
 
-    hr = DXVK_IDXGIVkInteropDevice1_GetVulkanHandles(device->base.pDev1, &device->vk_inst, &device->vk_phys, &device->vk);
-    if (FAILED(hr)) {
-        ERROR("Failed to GetVulkanHandles from DXVK D3D11 device: 0x%x", hr);
-        return hr;
-    }
-
+    DXVK_IDXGIVkInteropDevice1_GetVulkanHandles(device->dxvk_interop, &device->vk_inst, &device->vk_phys, &device->vk);
     INFO("%s: inst %p, phys %p, dev %p", __FUNCTION__, device->vk_inst, device->vk_phys, device->vk);
 
 #define X(name) device->vk_##name = (PFN_vk##name) vk_GetInstanceProcAddr(device->vk_inst, "vk" #name);
@@ -598,7 +602,7 @@ HRESULT APIENTRY virtio_wddm_create_device(D3D10DDI_HADAPTER hAdapter, D3D10DDIA
     };
     res = device->vk_GetSemaphoreWin32HandleKHR(device->vk, &get_handle_info, &present_fence);
     if (res != VK_SUCCESS) {
-        ERROR("Failed to create instance: %s", vk_result_to_str(res));
+        ERROR("Failed to get present semaphore handle: %s", vk_result_to_str(res));
         return E_FAIL;
     }
 

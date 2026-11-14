@@ -32,28 +32,29 @@ VkSemaphore DXVK_ID3D11Fence_GetVkSemaphore(ID3D11Fence *fence) {
     return d3d11_fence->GetFence()->handle();
 }
 
-HRESULT DXVK_IDXGIVkInteropDevice1_GetVulkanHandles(ID3D11Device1 *device, VkInstance *pInstance, VkPhysicalDevice *pPhysDev, VkDevice *pDevice) {
+HRESULT DXVK_ID3D11Device_QueryInterface_IDXGIVkInteropDevice1(ID3D11Device *device, IUnknown **dxvk_interop) {
     IDXGIVkInteropDevice1 *interop_device;
     HRESULT hr = device->QueryInterface(__uuidof(IDXGIVkInteropDevice1), (void **) &interop_device);
     if (FAILED(hr)) {
         return hr;
     }
-
-    interop_device->GetVulkanHandles(pInstance, pPhysDev, pDevice);
-    interop_device->Release();
+    *dxvk_interop = static_cast<IUnknown *>(interop_device);
     return S_OK;
 }
 
-HRESULT DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(ID3D11Device1 *device, const D3D11_TEXTURE2D_DESC1* pDesc, VkImage vkImage, ID3D11Texture2D **ppTexture2D) {
-    IDXGIVkInteropDevice1 *interop_device;
-    HRESULT hr = device->QueryInterface(__uuidof(IDXGIVkInteropDevice1), (void **) &interop_device);
-    if (FAILED(hr)) {
-        return hr;
-    }
+void DXVK_IDXGIVkInteropDevice1_GetVulkanHandles(IUnknown *dxvk_interop, VkInstance *pInstance, VkPhysicalDevice *pPhysDev, VkDevice *pDevice) {
+    auto interop_device = static_cast<IDXGIVkInteropDevice1 *>(dxvk_interop);
+    interop_device->GetVulkanHandles(pInstance, pPhysDev, pDevice);
+}
 
-    hr = interop_device->CreateTexture2DFromVkImage(pDesc, vkImage, ppTexture2D);
-    interop_device->Release();
-    return hr;
+HRESULT DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(IUnknown *dxvk_interop, const D3D11_TEXTURE2D_DESC1* pDesc, VkImage vkImage, ID3D11Texture2D **ppTexture2D) {
+    auto interop_device = static_cast<IDXGIVkInteropDevice1 *>(dxvk_interop);
+    return interop_device->CreateTexture2DFromVkImage(pDesc, vkImage, ppTexture2D);
+}
+
+void DXVK_IDXGIVkInteropDevice1_FlushRenderingCommands(IUnknown *dxvk_interop) {
+    auto interop_device = static_cast<IDXGIVkInteropDevice1 *>(dxvk_interop);
+    interop_device->FlushRenderingCommands();
 }
 
 }

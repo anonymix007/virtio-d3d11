@@ -29,6 +29,7 @@ typedef struct {
     VkD3DDDICallbacksMESA callbacks;
     IDXGIAdapter *adapter;
     // ID3D11Device is stored in base
+    IUnknown *dxvk_interop;
 
     struct {
         D3DKMT_HANDLE queue;

@@ -14,6 +14,7 @@
 #include "device.h"
 #include "dxgi.h"
 #include "resource.h"
+#include "dxvk.h"
 
 /*
 Presentable formats:
@@ -36,7 +37,7 @@ static HRESULT virtio_wddm_sync_with_present_context(VIRTIO_WDDM_Device *device)
         return hr;
     }
 
-    ID3D11DeviceContext1_Flush(device->base.pCtx1);
+    DXVK_IDXGIVkInteropDevice1_FlushRenderingCommands(device->dxvk_interop);
 
 #if 0
     HANDLE event = CreateEventA(NULL, true, false, NULL);
@@ -48,9 +49,9 @@ static HRESULT virtio_wddm_sync_with_present_context(VIRTIO_WDDM_Device *device)
 
     WaitForSingleObject(event, INFINITE);
 #else
-    // NOTE: the following requires DXVK to submit synchronously in ID3D11DeviceContext1_Flush
+    // NOTE: the following requires IDXGIVkInteropDevice1::FlushRenderingCommands
     // because pfnPresentCb waits for pfnSignalSychronizationObjectFromGpu to be submitted to
-    // kernel with the internal dxgkrnl lock is taken
+    // kernel with the internal dxgkrnl lock taken
     D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMGPU wait = {
         .hContext = device->present.context,
         .ObjectCount = 1,
@@ -62,6 +63,9 @@ static HRESULT virtio_wddm_sync_with_present_context(VIRTIO_WDDM_Device *device)
         ERROR("%s: Failed to wait from gpu: 0x%08lx", __FUNCTION__, hr);
         return hr;
     }
+#endif
+#if 1
+    device->base.pUMCallbacks->pfnPerformAmortizedProcessingCb(device->base.hRTCoreLayer);
 #endif
     return S_OK;
 }
@@ -262,7 +266,7 @@ HRESULT APIENTRY virtio_wddm_resolve_shared_resource(DXGI_DDI_ARG_RESOLVESHAREDR
 
     VIRTIO_WDDM_Device *device = (void *) pArgs->hDevice;
     /* MSDN says we should flush, so let's flush */
-    ID3D11DeviceContext1_Flush(device->base.pCtx1);
+    DXVK_IDXGIVkInteropDevice1_FlushRenderingCommands(device->dxvk_interop);
 
     return S_OK;
 }
@@ -310,6 +314,8 @@ HRESULT APIENTRY virtio_wddm_blt1(DXGI_DDI_ARG_BLT1 *pArgs) {
             ERROR("%s: Failed to flush: 0x%08lx", __FUNCTION__, hr);
             return hr;
         }
+    } else {
+        DXVK_IDXGIVkInteropDevice1_FlushRenderingCommands(device->dxvk_interop);
     }
 
     return S_OK;

@@ -13,5 +13,8 @@ typedef struct {
 
 HRESULT DXVK_CreateDXGIFactory(Vulkan_Instance_Info *instance, REFIID riid, void **ppFactory);
 VkSemaphore DXVK_ID3D11Fence_GetVkSemaphore(ID3D11Fence *fence);
-HRESULT DXVK_IDXGIVkInteropDevice1_GetVulkanHandles(ID3D11Device1 *device, VkInstance *pInstance, VkPhysicalDevice *pPhysDev, VkDevice *pDevice);
-HRESULT DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(ID3D11Device1 *device, const D3D11_TEXTURE2D_DESC1* pDesc, VkImage vkImage, ID3D11Texture2D **ppTexture2D);
+
+HRESULT DXVK_ID3D11Device_QueryInterface_IDXGIVkInteropDevice1(ID3D11Device *device, IUnknown **dxvk_interop);
+void DXVK_IDXGIVkInteropDevice1_GetVulkanHandles(IUnknown *dxvk_interop, VkInstance *pInstance, VkPhysicalDevice *pPhysDev, VkDevice *pDevice);
+HRESULT DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(IUnknown *dxvk_interop, const D3D11_TEXTURE2D_DESC1* pDesc, VkImage vkImage, ID3D11Texture2D **ppTexture2D);
+void DXVK_IDXGIVkInteropDevice1_FlushRenderingCommands(IUnknown *dxvk_interop);

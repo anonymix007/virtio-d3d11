@@ -689,7 +689,9 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
     resource->base.ByteStride  = pArgs->ByteStride;
 
     bool bind_present = !!(pArgs->BindFlags & D3D10_DDI_BIND_PRESENT);
-    /* Primary and presentable surfaces has to be allocated as 3d resources, but shared resources might be also blobs */
+    /* Primary textures have to be allocated as 3d resources, but shared resources might be also blobs.
+     * Keep presentable textures 3d for now, would have to allocate them as VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT
+     * otherwise */
     bool is_primary = bind_present && pArgs->pPrimaryDesc != NULL;
     bool is_present = bind_present && !is_primary;
     bool is_shared = !!(pArgs->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED);
@@ -712,6 +714,9 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
             bind |= D3D11_BIND_SHADER_RESOURCE;
         }
         misc |= D3D11_RESOURCE_MISC_SHARED;
+    }
+    if (is_primary) {
+        misc |= D3D11_RESOURCE_MISC_SHARED_DISPLAYABLE;
     }
 
     D3D11_SUBRESOURCE_DATA *subresource_data = tritonBuildInitData(pArgs);
@@ -777,7 +782,7 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
         }
 
         ID3D11Texture2D *tex = NULL;
-        hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->base.pDev1, &desc, resource->image, &tex);
+        hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->dxvk_interop, &desc, resource->image, &tex);
         if (FAILED(hr)) {
             ERROR("%s: failed to import VkImage to DXVK: 0x%08lx", __FUNCTION__, hr);
             tritonSetError(&device->base, hr);
@@ -829,7 +834,7 @@ void APIENTRY virtio_wddm_create_resource(D3D10DDI_HDEVICE hDevice, const D3D11D
         hr = create_shared_vk_image(device, &desc, VK_IMAGE_TILING_OPTIMAL, NULL, &export_info, &resource->memory, &resource->image, &resource->base.hKMAllocation);
 
         ID3D11Texture2D *tex = NULL;
-        hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->base.pDev1, &desc, resource->image, &tex);
+        hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->dxvk_interop, &desc, resource->image, &tex);
         if (FAILED(hr)) {
             ERROR("%s: failed to import VkImage to DXVK: 0x%08lx", __FUNCTION__, hr);
             tritonSetError(&device->base, hr);
@@ -1043,7 +1048,7 @@ void APIENTRY virtio_wddm_open_resource(D3D10DDI_HDEVICE hDevice, const D3D10DDI
             HRESULT hr = open_shared_vk_image(device, pArgs, hRTResource, &res_info, &desc, &resource->memory, &resource->image, NULL);
 
             ID3D11Texture2D *tex = NULL;
-            hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->base.pDev1, &desc, resource->image, &tex);
+            hr = DXVK_IDXGIVkInteropDevice1_CreateTexture2DFromVkImage(device->dxvk_interop, &desc, resource->image, &tex);
             if (FAILED(hr)) {
                 ERROR("%s: failed to import VkImage to DXVK: 0x%08lx", __FUNCTION__, hr);
                 tritonSetError(&device->base, hr);
