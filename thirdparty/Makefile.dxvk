@@ -34,7 +34,6 @@ DXVK_COMPILER_VERSION=$(shell $(CC) --version | head -1)
 UTIL_SRC := \
     src/util/util_env.cpp \
     src/util/util_string.cpp \
-    src/util/util_fps_limiter.cpp \
     src/util/util_file.cpp \
     src/util/util_flush.cpp \
     src/util/util_gdi.cpp \
@@ -53,6 +52,7 @@ UTIL_SRC := \
     src/util/sha1/sha1.c \
     src/util/sha1/sha1_util.cpp \
     src/util/sync/sync_recursive.cpp \
+    src/util/sync/sync_scoped.cpp
 
 SPIRV_SRC := \
     src/spirv/spirv_code_buffer.cpp
@@ -91,12 +91,15 @@ DXBC_SRC := \
     subprojects/dxbc-spirv/ir/ir_serialize.cpp \
     subprojects/dxbc-spirv/ir/ir_utils.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_arithmetic.cpp \
+    subprojects/dxbc-spirv/ir/passes/ir_pass_buffer_indexing.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_buffer_kind.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_cfg_cleanup.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_cfg_convert.cpp \
+    subprojects/dxbc-spirv/ir/passes/ir_pass_conditions.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_cse.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_derivative.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_descriptor_indexing.cpp \
+    subprojects/dxbc-spirv/ir/passes/ir_pass_eval.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_function.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_lower_consume.cpp \
     subprojects/dxbc-spirv/ir/passes/ir_pass_lower_io.cpp \
@@ -141,8 +144,6 @@ DXVK_SRC := \
     src/dxvk/dxvk_image.cpp \
     src/dxvk/dxvk_implicit_resolve.cpp \
     src/dxvk/dxvk_instance.cpp \
-    src/dxvk/dxvk_latency_builtin.cpp \
-    src/dxvk/dxvk_latency_reflex.cpp \
     src/dxvk/dxvk_memory.cpp \
     src/dxvk/dxvk_meta_blit.cpp \
     src/dxvk/dxvk_meta_clear.cpp \
